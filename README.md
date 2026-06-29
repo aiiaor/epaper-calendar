@@ -128,12 +128,12 @@ Loop: check time every 30 s → refresh at 00:01 daily
 │      │  Mon   │  Tue   │  Wed   │  Thu   │  Fri   │  Sat   │  Sun   │
 │      │ 29/06  │ 30/06  │ 01/07  │ 02/07  │ 03/07  │ 04/07  │ 05/07  │
 ├──────┼────────┴────────┴────────┴────────┴────────┴────────┴────────┤
-│  9   │  ┌──────────┐                                                    │
-│      │  │ Event A  │                                                    │
-│ 10   │  └──────────┘  ┌─────┐ ┌─────┐                                  │
-│      │                │  B  │ │  C  │  ← overlapping events            │
-│ ...  │                └─────┘ └─────┘                                  │
-└──────┴──────────────────────────────────────────────────────────────────┘
+│  9   │  ┌──────────┐                                                │
+│      │  │ Event A  │                                                │
+│ 10   │  └──────────┘  ┌─────┐ ┌─────┐                               │
+│      │                │  B  │ │  C  │  ← overlapping events         │
+│ ...  │                └─────┘ └─────┘                               │
+└──────┴──────────────────────────────────────────────────────────────┘
 ```
 
 - **Hour range** is computed from events (clamped between 10:00–18:00 minimum span).
@@ -176,6 +176,3 @@ epaper-calendar/
 | Wrong times | Events sent as UTC; adjust `TZ_OFFSET_H` if needed |
 | Empty grid | Calendar has events this week; check script date range |
 
-## License
-
-MIT
