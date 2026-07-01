@@ -75,8 +75,15 @@ int eventCount = 0;
 int colDay[7], colMonth[7];
 int todayDow = -1;
 
+int lastUpdateDay = -1;              // tm_yday of the last successful refresh
+int lastAttemptDay = -1;             // tm_yday of the current day's retry cycle
+int fetchFailCount = 0;
+unsigned long lastFetchAttemptMs = 0;
+const unsigned long FETCH_RETRY_INTERVAL_MS = 5UL * 60 * 1000;  // retry every 5 min on failure
+const int MAX_FETCH_RETRIES = 3;
+
 // ── Forward declarations ─────────────────────────────────────────────────────
-void fetchAndDisplay();
+bool fetchAndDisplay();
 void computeLayout();
 void drawGrid();
 
@@ -363,13 +370,37 @@ void showStatus(const String& message) {
 }
 #endif
 
-void connectWifi() {
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+const int WIFI_MAX_ATTEMPTS = 3;
+
+bool connectWifi() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+
+  for (int attempt = 1; attempt <= WIFI_MAX_ATTEMPTS; attempt++) {
+    Serial.printf("Wi-Fi connect attempt %d/%d...\n", attempt, WIFI_MAX_ATTEMPTS);
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+
+    int retry = 0;
+    while (WiFi.status() != WL_CONNECTED && retry++ < 20) {
+      delay(500);
+      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWi-Fi connected!");
+      return true;
+    }
+    Serial.println("\nWi-Fi connect attempt failed");
   }
-  Serial.println("\nWi-Fi connected!");
+
+  Serial.printf("Wi-Fi connection failed after %d attempts\n", WIFI_MAX_ATTEMPTS);
+  return false;
+}
+
+bool ensureWifiConnected() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  Serial.println("Wi-Fi disconnected — reconnecting...");
+  return connectWifi();
 }
 
 void syncTime() {
@@ -396,7 +427,13 @@ void setup() {
     Serial.println("LittleFS mounted OK");
   }
 
-  connectWifi();
+  if (!connectWifi()) {
+    Serial.println("Starting up without Wi-Fi; will keep retrying during scheduled updates");
+#ifdef EPAPER_ENABLE
+    showStatus("Wi-Fi connection failed");
+#endif
+  }
+
   syncTime();
   fetchAndDisplay();
 }
@@ -404,9 +441,36 @@ void setup() {
 void loop() {
   struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
-    if (timeinfo.tm_hour == 0 && timeinfo.tm_min == 1) {
-      fetchAndDisplay();
-      delay(60000);
+    // Start of a new day's retry cycle — reset the failure count.
+    if (timeinfo.tm_yday != lastAttemptDay) {
+      lastAttemptDay = timeinfo.tm_yday;
+      fetchFailCount = 0;
+    }
+
+    bool isNewDay     = (timeinfo.tm_yday != lastUpdateDay);
+    bool pastMidnight = (timeinfo.tm_hour > 0) || (timeinfo.tm_min >= 1);
+    bool giveUp       = (fetchFailCount >= MAX_FETCH_RETRIES);
+    unsigned long now = millis();
+    bool retryDue     = (lastFetchAttemptMs == 0) ||
+                         (now - lastFetchAttemptMs >= FETCH_RETRY_INTERVAL_MS);
+
+    if (isNewDay && pastMidnight && retryDue && !giveUp) {
+      lastFetchAttemptMs = now;
+
+      Serial.printf("Midnight update attempt %d/%d...\n", fetchFailCount + 1, MAX_FETCH_RETRIES);
+
+      if (fetchAndDisplay()) {
+        Serial.printf("Midnight update succeeded on attempt %d/%d\n", fetchFailCount + 1, MAX_FETCH_RETRIES);
+      } else {
+        fetchFailCount++;
+        Serial.printf("Midnight update attempt %d/%d failed\n", fetchFailCount, MAX_FETCH_RETRIES);
+        if (fetchFailCount >= MAX_FETCH_RETRIES) {
+          Serial.println("Calendar update failed 3 times — giving up for today");
+#ifdef EPAPER_ENABLE
+          showStatus("Update failed. Will retry tomorrow.");
+#endif
+        }
+      }
     }
   }
   delay(30000);
@@ -470,24 +534,32 @@ void parseEvents(JsonArray calendar) {
   }
 }
 
-void fetchAndDisplay() {
+bool fetchAndDisplay() {
   Serial.println("Fetching calendar...");
+
+  if (!ensureWifiConnected()) return false;
+
 #ifdef EPAPER_ENABLE
   showStatus("Fetching calendar...");
 #endif
 
   String json;
-  if (!fetchCalendarJson(json)) return;
+  if (!fetchCalendarJson(json)) return false;
 
   DynamicJsonDocument doc(8192);
   if (deserializeJson(doc, json)) {
     Serial.println("JSON parse error");
-    return;
+    return false;
   }
 
   parseEvents(doc.as<JsonArray>());
   computeLayout();
   drawGrid();
+
+  struct tm t;
+  if (getLocalTime(&t)) lastUpdateDay = t.tm_yday;
+
+  return true;
 }
 
 // ── Draw the calendar grid ─────────────────────────────────────────────────────
